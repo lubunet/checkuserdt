@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE_NAME="checkuser555.service"
+PORT="${PORT:-555}"
+BASE="http://127.0.0.1:${PORT}"
+APP_DIR="/root/checkuserdt"
+
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+line(){ echo -e "${CYAN}------------------------------------------------------------${NC}"; }
+pause(){ echo; read -rp "Pressione ENTER para voltar ao menu..." _; }
+
+public_ip(){
+  local ip
+  ip="$(curl -4fsS --connect-timeout 3 --max-time 6 https://api.ipify.org 2>/dev/null || true)"
+  [[ -z "$ip" ]] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -z "$ip" ]] && ip="IP_DA_VPS"
+  echo "$ip"
+}
+
+show_header(){
+  clear 2>/dev/null || true
+  echo -e "${BLUE}============================================================${NC}"
+  echo -e "${GREEN}                 CHECKUSERDT - PAINEL CHK${NC}"
+  echo -e "${BLUE}============================================================${NC}"
+  echo -e "Servico: ${SERVICE_NAME} | Porta: ${PORT}"
+  echo
+}
+
+status_service(){
+  systemctl status "${SERVICE_NAME}" -l --no-pager || true
+}
+
+test_health(){
+  echo -e "${YELLOW}Testando ${BASE}/health...${NC}"
+  curl -sS "${BASE}/health" || true
+  echo
+}
+
+test_check(){
+  read -rp "Digite o usuario normal ou UUID do Xray: " value
+  [[ -z "$value" ]] && { echo "Valor vazio."; return; }
+  echo -e "${YELLOW}Testando ${BASE}/check/${value}...${NC}"
+  curl -sS "${BASE}/check/${value}" || true
+  echo
+}
+
+show_links(){
+  local ip
+  ip="$(public_ip)"
+  line
+  echo -e "${GREEN}Link para colocar no app:${NC}"
+  echo "http://${ip}:${PORT}/check/USUARIO_OU_UUID"
+  echo
+  echo -e "${GREEN}Painel web:${NC}"
+  echo "http://${ip}:${PORT}/panel"
+  echo
+  echo -e "${GREEN}Teste local:${NC}"
+  echo "curl http://127.0.0.1:${PORT}/health"
+  line
+}
+
+list_users(){
+  echo -e "${YELLOW}Listando usuarios Xray encontrados no config.json...${NC}"
+  curl -sS "${BASE}/users" || true
+  echo
+}
+
+remove_script(){
+  echo -e "${RED}Atencao: isso vai remover o servico, binarios e opcionalmente a pasta do projeto.${NC}"
+  sudo bash "${APP_DIR}/uninstall.sh"
+}
+
+while true; do
+  show_header
+  echo "1) Ver status do servico"
+  echo "2) Testar /health"
+  echo "3) Testar usuario normal ou UUID"
+  echo "4) Mostrar usuarios Xray encontrados"
+  echo "5) Mostrar links do app"
+  echo "6) Iniciar servico"
+  echo "7) Parar servico"
+  echo "8) Reiniciar servico"
+  echo "9) Ver logs em tempo real"
+  echo "10) Remover script/servico"
+  echo "0) Sair"
+  echo
+  read -rp "Escolha uma opcao: " opt
+  echo
+  case "$opt" in
+    1) status_service; pause ;;
+    2) test_health; pause ;;
+    3) test_check; pause ;;
+    4) list_users; pause ;;
+    5) show_links; pause ;;
+    6) sudo systemctl start "${SERVICE_NAME}"; echo -e "${GREEN}Servico iniciado.${NC}"; pause ;;
+    7) sudo systemctl stop "${SERVICE_NAME}"; echo -e "${YELLOW}Servico parado.${NC}"; pause ;;
+    8) sudo systemctl restart "${SERVICE_NAME}"; echo -e "${GREEN}Servico reiniciado.${NC}"; pause ;;
+    9) echo "Ctrl+C para sair dos logs."; sleep 1; sudo journalctl -u "${SERVICE_NAME}" -f ;;
+    10) remove_script; exit 0 ;;
+    0) exit 0 ;;
+    *) echo -e "${RED}Opcao invalida.${NC}"; pause ;;
+  esac
+done
