@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+SERVICE_NAME="checkuser555.service"
+BASE_URL="http://127.0.0.1:555"
+APP_LINK_FILE="/root/checkuserdt/app_link.txt"
+UNINSTALL="/root/checkuserdt/uninstall.sh"
+C_RESET='\033[0m'
+C_GREEN='\033[38;5;46m'
+C_CYAN='\033[38;5;51m'
+C_BLUE='\033[38;5;39m'
+C_YELLOW='\033[38;5;220m'
+C_RED='\033[38;5;196m'
+C_GRAY='\033[38;5;240m'
+C_BOLD='\033[1m'
+
+pause(){ printf "\n${C_GRAY}Pressione ENTER para voltar...${C_RESET}"; read -r _; }
+header(){ clear; printf "${C_CYAN}${C_BOLD}============================================================${C_RESET}\n"; printf "${C_GREEN}${C_BOLD}                  CHECKUSERDT LUBUNET${C_RESET}\n"; printf "${C_CYAN}             Painel terminal | porta 555${C_RESET}\n"; printf "${C_CYAN}${C_BOLD}============================================================${C_RESET}\n"; }
+is_active(){ systemctl is-active --quiet "$SERVICE_NAME"; }
+pretty_json(){ if command -v python3 >/dev/null 2>&1; then python3 -m json.tool 2>/dev/null || cat; else cat; fi; }
+show_service_status(){ systemctl status "$SERVICE_NAME" -l --no-pager; }
+
+service_toggle_label(){ if is_active; then printf "Parar serviço"; else printf "Iniciar serviço"; fi; }
+
+get_app_link(){
+  if [[ -f "$APP_LINK_FILE" ]]; then
+    local saved
+    saved="$(tr -d '\r\n' < "$APP_LINK_FILE")"
+    [[ -n "$saved" ]] && { printf "%s" "$saved"; return; }
+  fi
+  local ip
+  ip="$(curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+  [[ -z "$ip" ]] && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -z "$ip" ]] && ip="IP_DA_VPS"
+  printf "http://%s:555" "$ip"
+}
+
+option_toggle_service(){
+  header
+  if is_active; then
+    printf "${C_YELLOW}Serviço ativo. Parando agora...${C_RESET}\n"
+    sudo systemctl stop "$SERVICE_NAME"
+    printf "${C_GREEN}Serviço parado.${C_RESET}\n"
+  else
+    printf "${C_YELLOW}Serviço parado. Iniciando agora...${C_RESET}\n"
+    sudo systemctl start "$SERVICE_NAME"
+    printf "${C_GREEN}Serviço iniciado.${C_RESET}\n"
+  fi
+  pause
+}
+
+option_restart(){
+  header
+  printf "${C_YELLOW}Reiniciando serviço...${C_RESET}\n"
+  sudo systemctl restart "$SERVICE_NAME"
+  printf "${C_GREEN}Serviço reiniciado.${C_RESET}\n"
+  pause
+}
+
+option_verify_user(){
+  header
+  printf "${C_YELLOW}Digite o usuário normal ou UUID:${C_RESET} "
+  read -r target
+  [[ -z "$target" ]] && return
+  printf "\n${C_CYAN}Resultado:${C_RESET}\n"
+  curl -sS "$BASE_URL/check/$target" | pretty_json
+  pause
+}
+
+option_online(){
+  while true; do
+    header
+    printf "${C_YELLOW}Usuários online por categoria${C_RESET}\n"
+    printf "${C_GRAY}Mostra usuários validados pelo CheckUser nos últimos 10 minutos e usuários com heartbeat do WebView.${C_RESET}\n"
+    printf "${C_GRAY}Com heartbeat completo, aparecem config, IP local, rede e operadora/categoria do app.${C_RESET}\n\n"
+    mapfile -t cats < <(curl -sS "$BASE_URL/online/categories?format=text" 2>/dev/null | sed '/^$/d')
+    if [[ ${#cats[@]} -eq 0 ]]; then
+      printf "${C_RED}Nenhum usuário online encontrado ainda.${C_RESET}\n\n"
+      printf "${C_GRAY}Se o app acabou de validar em /check, ele deve aparecer em 'CheckUser'.${C_RESET}\n"
+      printf "${C_GRAY}Para dados completos do DTunnel, o WebView precisa enviar heartbeat para:${C_RESET}\n"
+      printf "${C_GREEN}$(get_app_link)/telemetry/heartbeat${C_RESET}\n"
+      pause
+      return
+    fi
+    local i=1
+    local names=()
+    for row in "${cats[@]}"; do
+      local name="${row%%|*}"
+      local count="${row##*|}"
+      names+=("$name")
+      printf "${C_GREEN}[%d]${C_RESET} %s ${C_GRAY}(%s online)${C_RESET}\n" "$i" "$name" "$count"
+      i=$((i+1))
+    done
+    printf "${C_GREEN}[0]${C_RESET} Voltar ao painel principal\n\n"
+    printf "${C_YELLOW}Escolha uma categoria:${C_RESET} "
+    read -r choice
+    [[ "$choice" == "0" ]] && return
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#names[@]} )); then
+      printf "${C_RED}Opção inválida.${C_RESET}\n"; sleep 1; continue
+    fi
+    local selected="${names[$((choice-1))]}"
+    header
+    printf "${C_YELLOW}Categoria: ${selected}${C_RESET}\n\n"
+    curl -sS -G --data-urlencode "category=$selected" --data-urlencode "format=text" "$BASE_URL/online/category"
+    pause
+  done
+}
+
+option_link(){
+  header
+  printf "${C_YELLOW}Link para usar no app:${C_RESET}\n"
+  printf "${C_GREEN}${C_BOLD}%s${C_RESET}\n" "$(get_app_link)"
+  printf "\n${C_GRAY}Use somente o link base acima. O app envia/captura o usuário ou UUID automaticamente.${C_RESET}\n"
+  pause
+}
+
+option_remove(){
+  header
+  printf "${C_RED}${C_BOLD}Remover CheckUserDT${C_RESET}\n"
+  printf "${C_YELLOW}Isso vai parar o serviço, remover o systemd, binário, comando chk e a pasta /root/checkuserdt.${C_RESET}\n"
+  printf "Digite ${C_RED}REMOVER${C_RESET} para confirmar: "
+  read -r confirm
+  if [[ "$confirm" == "REMOVER" ]]; then
+    sudo bash "$UNINSTALL"
+    exit 0
+  fi
+  printf "${C_GRAY}Remoção cancelada.${C_RESET}\n"
+  pause
+}
+
+while true; do
+  header
+  if is_active; then
+    printf "Status atual: ${C_GREEN}ATIVO${C_RESET}\n\n"
+  else
+    printf "Status atual: ${C_RED}PARADO${C_RESET}\n\n"
+  fi
+  printf "${C_GREEN}[1]${C_RESET} Ver status\n"
+  printf "${C_GREEN}[2]${C_RESET} $(service_toggle_label)\n"
+  printf "${C_GREEN}[3]${C_RESET} Reiniciar serviço\n"
+  printf "${C_GREEN}[4]${C_RESET} Verificar um usuário ou UUID\n"
+  printf "${C_GREEN}[5]${C_RESET} Usuários online\n"
+  printf "${C_GREEN}[6]${C_RESET} Ver link do app\n"
+  printf "${C_GREEN}[7]${C_RESET} Remover script\n"
+  printf "${C_GREEN}[0]${C_RESET} Sair\n\n"
+  printf "${C_YELLOW}Escolha uma opção:${C_RESET} "
+  read -r op
+  case "$op" in
+    1) header; show_service_status; pause ;;
+    2) option_toggle_service ;;
+    3) option_restart ;;
+    4) option_verify_user ;;
+    5) option_online ;;
+    6) option_link ;;
+    7) option_remove ;;
+    0) clear; exit 0 ;;
+    *) printf "${C_RED}Opção inválida.${C_RESET}\n"; sleep 1 ;;
+  esac
+done
